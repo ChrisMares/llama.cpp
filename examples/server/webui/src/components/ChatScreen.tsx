@@ -99,6 +99,7 @@ export default function ChatScreen() {
     pendingMessages,
     canvasData,
     replaceMessageAndGenerate,
+    ragCollections
   } = useAppContext();
 
   const textarea: ChatTextareaApi = useChatTextarea(prefilledMsg.content());
@@ -215,6 +216,66 @@ export default function ChatScreen() {
         ]
       : [];
 
+  const [showDropdown, setShowDropdown] = useState(false);
+  const [dropdownOptions] = useState([...ragCollections]);
+  const [filteredOptions, setFilteredOptions] = useState<string[]>([]);
+  const [highlightedIndex, setHighlightedIndex] = useState<number>(0);
+
+  const handleTextareaKeyDown = (
+    e: React.KeyboardEvent<HTMLTextAreaElement>
+  ) => {
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+
+    const value = textarea.value();
+    if (e.key === '/') {
+      setShowDropdown(true);
+      setFilteredOptions(dropdownOptions);
+      setHighlightedIndex(0); // Reset highlight to the first option
+    } else if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      if (showDropdown && filteredOptions.length > 0) {
+        // Select the highlighted option
+        handleOptionClick(filteredOptions[highlightedIndex]);
+      } else {
+        sendNewMessage();
+      }
+      setShowDropdown(false);
+    } else if (e.key === 'Escape') {
+      setShowDropdown(false);
+    } else if (e.key === 'ArrowDown' && showDropdown) {
+      e.preventDefault();
+      setHighlightedIndex((prevIndex) =>
+        Math.min(prevIndex + 1, filteredOptions.length - 1)
+      );
+    } else if (e.key === 'ArrowUp' && showDropdown) {
+      e.preventDefault();
+      setHighlightedIndex((prevIndex) => Math.max(prevIndex - 1, 0));
+    } else {
+      // Filter dropdown options based on input
+      const lastWord = value.split(' ').pop() ?? '';
+      if (lastWord.startsWith('/')) {
+        const query = lastWord.slice(1).toLowerCase();
+        const newFilteredOptions = dropdownOptions.filter((option) =>
+          option.toLowerCase().startsWith(query)
+        );
+        setFilteredOptions(newFilteredOptions);
+        setHighlightedIndex(0); // Reset highlight when filtering
+      } else {
+        setShowDropdown(false);
+      }
+    }
+  };
+
+  const handleOptionClick = (option: string) => {
+    const value = textarea.value();
+    const lastWord = value.split(' ').pop() ?? '';
+    const newValue =
+      value.slice(0, value.length - lastWord.length) + `/${option} `;
+    textarea.setValue(newValue);
+    setShowDropdown(false);
+    textarea.focus();
+  };
+
   return (
     <div
       className={classNames({
@@ -251,20 +312,31 @@ export default function ChatScreen() {
 
         {/* chat input */}
         <div className="flex flex-row items-end pt-8 pb-6 sticky bottom-0 bg-base-100">
+          {showDropdown && (
+            <div
+              className="absolute bottom-full mb-2 border border-gray-300 rounded shadow-lg z-10"
+              style={{ backgroundColor: '#f0f0f0', color: '#000000' }} // Slightly grey background and black text
+            >
+              {filteredOptions.map((option, index) => (
+                <div
+                  key={option}
+                  className={`px-4 py-2 cursor-pointer hover:bg-gray-200 ${
+                    index === highlightedIndex ? 'bg-gray-300' : ''
+                  }`}
+                  onClick={() => handleOptionClick(option)}
+                >
+                  {option}
+                </div>
+              ))}
+            </div>
+          )}
           <textarea
             // Default (mobile): Enable vertical resize, overflow auto for scrolling if needed
             // Large screens (lg:): Disable manual resize, apply max-height for autosize limit
             className="textarea textarea-bordered w-full resize-vertical lg:resize-none lg:max-h-48 lg:overflow-y-auto" // Adjust lg:max-h-48 as needed (e.g., lg:max-h-60)
             placeholder="Type a message (Shift+Enter to add a new line)"
             ref={textarea.ref}
-            onInput={textarea.onInput} // Hook's input handler (will only resize height on lg+ screens)
-            onKeyDown={(e) => {
-              if (e.nativeEvent.isComposing || e.keyCode === 229) return;
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                sendNewMessage();
-              }
-            }}
+            onKeyDown={handleTextareaKeyDown}
             id="msg-input"
             dir="auto"
             // Set a base height of 2 rows for mobile views

@@ -4,15 +4,20 @@ import { isNumeric } from './utils/misc';
 export const isDev = import.meta.env.MODE === 'development';
 
 // constants
-export const BASE_URL = new URL('.', document.baseURI).href
-  .toString()
-  .replace(/\/$/, '');
+// export const BASE_URL = new URL('.', document.baseURI).href
+//   .toString()
+//   .replace(/\/$/, '');
+
+// running server
+export const BASE_URL = 'http://127.0.0.1:8080'
+
+console.log('BASE_URL:', BASE_URL);
 
 export const CONFIG_DEFAULT = {
   // Note: in order not to introduce breaking changes, please keep the same data type (number, string, etc) if you want to change the default value. Do not use null or undefined for default value.
   // Do not use nested objects, keep it single level. Prefix the key if you need to group them.
   apiKey: '',
-  systemMessage: 'You are a helpful assistant.',
+  systemMessage: 'Using the provided context (if any), generate a precise and informative response to the following question or task. Ensure the answer is concise, relevant, and directly addresses the query based on the retrieved information. The question is:',
   showTokensPerSecond: false,
   showThoughtInProgress: false,
   excludeThoughtOnReq: true,
