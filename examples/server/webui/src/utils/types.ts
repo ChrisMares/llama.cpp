@@ -114,3 +114,22 @@ export interface RAGCodeResponse {
     uris: any; // or null
   };
 }
+
+export interface RAGProductResponse {
+  results: {
+      data: null;
+      distances: number[][];
+      documents: string[][];
+      embeddings: null;
+      ids: string[][];
+      included: string[];
+      metadatas: Array<{
+          brand_id: number;
+          brand_name: string;
+          categories: string;
+          category_ids: string;
+          price: number;
+      }>[];
+      uris: null;
+  };
+}

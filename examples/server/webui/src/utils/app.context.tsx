@@ -6,6 +6,7 @@ import {
   Message,
   PendingMessage,
   RAGCodeResponse,
+  RAGProductResponse,
   ViewingChat,
 } from './types';
 import StorageUtils from './storage';
@@ -86,7 +87,7 @@ export const AppContextProvider = ({
   const [config, setConfig] = useState(StorageUtils.getConfig());
   const [canvasData, setCanvasData] = useState<CanvasData | null>(null);
   const [showSettings, setShowSettings] = useState(false);
-  const [ragCollections] = useState(['codebase', 'items']);
+  const [ragCollections] = useState(['codebase', 'products', 'documentation', 'medical_records case:14338']);
 
   // handle change when the convId from URL is changed
   useEffect(() => {
@@ -292,47 +293,27 @@ export const AppContextProvider = ({
 
     // Intercept queries starting with '/codebase'
     if (content.startsWith('/codebase')) {
-      try {
-        // Call your RAG system to fetch relevant context
-        const ragResponse = await fetch('http://127.0.0.1:5001/query', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            collection: 'codebase',
-            query: content, // Pass the content as the query
-            limit: 20,
-            where: {
-              $or: [
-                { repo_name: 'bfg-rest-api' },
-                { repo_name: 'bfgapi' },
-                { repo_name: 'webapi' },
-              ],
-            },
-          }),
-        });
-
-        if (!ragResponse.ok) {
-          throw new Error('Failed to fetch from RAG system');
-        }
-
-        const ragData: RAGCodeResponse = await ragResponse.json();
-
-        //The RAG context to be injected into the query
-        const allDocsString = ragData.results.documents
-          .flat()
-          .join(" ");
-
-        const directive = 'You are a helpful assistant. The context provided below is automatically fetched and may include technical details such as repository names, file names, component names, class names, and function names. Before answering the user\'s query, carefully review all the provided context and integrate it if it is relevant. If any part of the context is ambiguous or unrelated to the query, ignore it. When referencing code, be as specific as possible by including repository names, file names, components, class names, and functions where applicable. Base your answer primarily on the valid context, and if the context is incomplete, note the ambiguity and only supplement with general knowledge as necessary. Prioritize clarity and precision in your response.';
-
-        const newContent = content.replace('/codebase', directive + '\n\n' + allDocsString + '\n\n' + content);
-
+      const newContent = await fetchRAGCodebase(content);
+      if (newContent !== false) {
         content = newContent;
-      } catch (error) {
-        console.error('Error fetching from RAG system:', error);
-        alert('Failed to fetch context from RAG system.');
-        return false;
+      }
+    }
+    else if (content.startsWith('/products')) {
+      const newContent = await fetchRAGProducts(content);
+      if (newContent !== false) {
+        content = newContent;
+      }
+    }
+    else if (content.startsWith('/documentation')) {
+      const newContent = await fetchRAGDocumentation(content);
+      if (newContent !== false) {
+        content = newContent;
+      }
+    }
+    else if (content.startsWith('/medical_records')) {
+      const newContent = await fetchRAGMedRecords(content);
+      if (newContent !== false) {
+        content = newContent;
       }
     }
 
@@ -441,3 +422,147 @@ export const AppContextProvider = ({
 };
 
 export const useAppContext = () => useContext(AppContext);
+
+async function fetchRAGCodebase(content: string): Promise<string | false> {
+  try {
+    const ragResponse = await fetch('http://127.0.0.1:5001/query', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        collection: 'codebase',
+        query: content, // Pass the content as the query
+        limit: 20,
+        where: {
+          $or: [
+            { repo_name: 'bfg-rest-api' },
+            { repo_name: 'bfgapi' },
+            { repo_name: 'webapi' },
+          ],
+        },
+      }),
+    });
+
+    if (!ragResponse.ok) {
+      throw new Error('Failed to fetch from RAG system');
+    }
+
+    const ragData: RAGCodeResponse = await ragResponse.json();
+
+    // The RAG context to be injected into the query
+    const allDocsString = ragData.results.documents.flat().join(' ');
+
+    const directive =
+      'You are a helpful assistant. The context provided below is automatically fetched and may include technical details such as repository names, file names, component names, class names, and function names. Before answering the user\'s query, carefully review all the provided context and integrate it if it is relevant. If any part of the context is ambiguous or unrelated to the query, ignore it. When referencing code, be as specific as possible by including repository names, file names, components, class names, and functions where applicable. Base your answer primarily on the valid context, and if the context is incomplete, note the ambiguity and only supplement with general knowledge as necessary. Prioritize clarity and precision in your response.';
+
+    return content.replace('/codebase', directive + '\n\n' + allDocsString + '\n\n' + content);
+  } catch (error) {
+    console.error('Error fetching from RAG system:', error);
+    alert('Failed to fetch context from RAG system.');
+    return false;
+  }
+}
+
+async function fetchRAGProducts(content: string): Promise<string | false> {
+  try {
+    const ragResponse = await fetch('http://127.0.0.1:5001/query', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        collection: 'products',
+        query: content, // Pass the content as the query
+        limit: 20,
+        where: null
+      }),
+    });
+
+    if (!ragResponse.ok) {
+      throw new Error('Failed to fetch from RAG producs system');
+    }
+
+    const ragData: RAGProductResponse = await ragResponse.json();
+
+    // The RAG context to be injected into the query
+    const allDocsString = ragData.results.documents.flat().join(' ');
+
+    const directive =
+      'You are a helpful assistant tasked with selecting items based on the users input. The system has provided a list of 20 items. Your job is to evaluate these items and choose the top 5 that best match the users query. Use the users input to guide your selection, prioritizing relevance and accuracy.';
+
+    return content.replace('/products', directive + '\n\n' + allDocsString + '\n\n' + content);
+  } catch (error) {
+    console.error('Error fetching from RAG system:', error);
+    alert('Failed to fetch context from RAG system.');
+    return false;
+  }
+}
+
+async function fetchRAGDocumentation(content: string): Promise<string | false> {
+  try {
+    const ragResponse = await fetch('http://127.0.0.1:5001/query', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        collection: 'documentation',
+        query: content, // Pass the content as the query
+        limit: 20,
+        where: null
+      }),
+    });
+
+    if (!ragResponse.ok) {
+      throw new Error('Failed to fetch from RAG producs system');
+    }
+
+    const ragData: RAGProductResponse = await ragResponse.json();
+
+    // The RAG context to be injected into the query
+    const allDocsString = ragData.results.documents.flat().join(' ');
+
+    const directive =
+      'You are a helpful assistant. The system has provided a list documentation snippets. Your job is to evaluate these snippets and use any that are relevant. If a snippet is not relevant to the users query, then ignore it. If a snippet is used then site any particluar metadata about it such as file name, table name, column name.';
+    return content.replace('/documentation', directive + '\n\n' + allDocsString + '\n\n' + content);
+  } catch (error) {
+    console.error('Error fetching from RAG system:', error);
+    alert('Failed to fetch context from RAG system.');
+    return false;
+  }
+}
+
+async function fetchRAGMedRecords(content: string): Promise<string | false> {
+  try {
+    const ragResponse = await fetch('http://127.0.0.1:5001/query', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        collection: 'medical_records',
+        query: content, // Pass the content as the query
+        limit: 20,
+        where: null
+      }),
+    });
+
+    if (!ragResponse.ok) {
+      throw new Error('Failed to fetch from RAG producs system');
+    }
+
+    const ragData: RAGProductResponse = await ragResponse.json();
+
+    // The RAG context to be injected into the query
+    const allDocsString = ragData.results.documents.flat().join(' ');
+
+    const directive =
+      'You are a medical assistant. Evaluate provided medical record snippets and use only relevant ones. Reformat any dates as needed. Cite metadata (file name, topic, caseId, type) for used snippets. Do not cite the actual snippet name, just file name. Ignore irrelevant snippets.';
+    return directive + '\n\n' + allDocsString + '\n\n' + content;
+  } catch (error) {
+    console.error('Error fetching from RAG system:', error);
+    alert('Failed to fetch context from RAG system.');
+    return false;
+  }
+}
