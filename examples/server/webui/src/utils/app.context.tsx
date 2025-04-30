@@ -439,6 +439,7 @@ async function fetchRAGCodebase(content: string): Promise<string | false> {
             { repo_name: 'bfg-rest-api' },
             { repo_name: 'bfgapi' },
             { repo_name: 'webapi' },
+            { repo_name: 'sfa-web-3' },
           ],
         },
       }),
