@@ -99,6 +99,26 @@
         "cacheVariables": {
             "GGML_CUDA": "ON"
         }
+    },
+    {
+      "name": "linux-cuda-gcc12",
+      "displayName": "Linux + CUDA (GCC 12)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build-${presetName}",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "GGML_CUDA": "ON"
+      },
+      "environment": {
+        "CC": "/usr/bin/gcc-12",
+        "CXX": "/usr/bin/g++-12"
+      }
+    }
+  ],
+    "buildPresets": [
+    {
+      "name": "linux-cuda-gcc12",
+      "configurePreset": "linux-cuda-gcc12"
     }
   ]
 }
