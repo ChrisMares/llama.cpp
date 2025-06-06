@@ -133,6 +133,30 @@ export interface LlamaCppServerProps {
   modalities?: {
     vision: boolean;
     audio: boolean;
-  };
+  }
+}
   // TODO: support params
+export interface RAGCodeResponse {
+  results: {
+    data: any; // or null if that's always expected
+    distances: number[][];
+    documents: string[][];
+    embeddings: any; // or null
+    ids: string[][];
+    included: string[];
+    metadatas: {
+      class_name: string;
+      code: string;
+      file_name: string;
+      file_path: string;
+      function_name: string;
+      interface_name: string;
+      parameters: string;
+      properties: string;
+      repo_name: string;
+      return_type: string;
+      type: string;
+    }[][];
+    uris: any; // or null
+  };
 }

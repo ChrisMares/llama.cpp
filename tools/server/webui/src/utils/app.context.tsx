@@ -6,6 +6,7 @@ import {
   LlamaCppServerProps,
   Message,
   PendingMessage,
+  RAGCodeResponse,
   ViewingChat,
 } from './types';
 import StorageUtils from './storage';
@@ -52,6 +53,7 @@ interface AppContextValue {
 
   // props
   serverProps: LlamaCppServerProps | null;
+  ragCollections: string[];
 }
 
 // this callback is used for scrolling to the bottom of the chat and switching to the last node
@@ -93,6 +95,7 @@ export const AppContextProvider = ({
   const [config, setConfig] = useState(StorageUtils.getConfig());
   const [canvasData, setCanvasData] = useState<CanvasData | null>(null);
   const [showSettings, setShowSettings] = useState(false);
+  const [ragCollections] = useState(['codebase', 'items']);
 
   // get server props
   useEffect(() => {
@@ -162,6 +165,9 @@ export const AppContextProvider = ({
 
     const config = StorageUtils.getConfig();
     const currConversation = await StorageUtils.getOneConversation(convId);
+
+    console.log('currConversation' , currConversation);
+
     if (!currConversation) {
       throw new Error('Current conversation is not found');
     }
@@ -302,7 +308,56 @@ export const AppContextProvider = ({
     extra: Message['extra'],
     onChunk: CallbackGeneratedChunk
   ): Promise<boolean> => {
+
+    console.log('sendMessage', { convId, leafNodeId, content, extra });
+
     if (isGenerating(convId ?? '') || content.trim().length === 0) return false;
+
+    // Intercept queries starting with '/codebase'
+    if (content.startsWith('/codebase')) {
+      try {
+        // Call your RAG system to fetch relevant context
+        const ragResponse = await fetch('http://127.0.0.1:5001/query', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            collection: 'codebase',
+            query: content, // Pass the content as the query
+            limit: 20,
+            where: {
+              $or: [
+                { repo_name: 'bfg-rest-api' },
+                { repo_name: 'bfgapi' },
+                { repo_name: 'webapi' },
+              ],
+            },
+          }),
+        });
+
+        if (!ragResponse.ok) {
+          throw new Error('Failed to fetch from RAG system');
+        }
+
+        const ragData: RAGCodeResponse = await ragResponse.json();
+
+        //The RAG context to be injected into the query
+        const allDocsString = ragData.results.documents
+          .flat()
+          .join(" ");
+
+        const directive = 'You are a helpful assistant. The context provided below is automatically fetched and may include technical details such as repository names, file names, component names, class names, and function names. Before answering the user\'s query, carefully review all the provided context and integrate it if it is relevant. If any part of the context is ambiguous or unrelated to the query, ignore it. When referencing code, be as specific as possible by including repository names, file names, components, class names, and functions where applicable. Base your answer primarily on the valid context, and if the context is incomplete, note the ambiguity and only supplement with general knowledge as necessary. Prioritize clarity and precision in your response.';
+
+        const newContent = content.replace('/codebase', directive + '\n\n' + allDocsString + '\n\n' + content);
+
+        content = newContent;
+      } catch (error) {
+        console.error('Error fetching from RAG system:', error);
+        alert('Failed to fetch context from RAG system.');
+        return false;
+      }
+    }
 
     if (convId === null || convId.length === 0 || leafNodeId === null) {
       const conv = await StorageUtils.createConversation(
@@ -401,6 +456,7 @@ export const AppContextProvider = ({
         showSettings,
         setShowSettings,
         serverProps,
+        ragCollections,
       }}
     >
       {children}
