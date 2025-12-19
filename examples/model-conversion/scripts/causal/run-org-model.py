@@ -2,50 +2,86 @@
 
 import argparse
 import os
+import sys
 import importlib
 from pathlib import Path
 
-from transformers import AutoTokenizer, AutoModelForCausalLM, AutoConfig
+# Add parent directory to path for imports
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+
+from transformers import AutoTokenizer, AutoModelForCausalLM, AutoModelForImageTextToText, AutoConfig
 import torch
 import numpy as np
+from utils.common import debug_hook
 
-unreleased_model_name = os.getenv('UNRELEASED_MODEL_NAME')
-
-parser = argparse.ArgumentParser(description='Process model with specified path')
-parser.add_argument('--model-path', '-m', help='Path to the model')
+parser = argparse.ArgumentParser(description="Process model with specified path")
+parser.add_argument("--model-path", "-m", help="Path to the model")
+parser.add_argument("--prompt-file", "-f", help="Optional prompt file", required=False)
+parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose debug output")
 args = parser.parse_args()
 
-model_path = os.environ.get('MODEL_PATH', args.model_path)
+model_path = os.environ.get("MODEL_PATH", args.model_path)
 if model_path is None:
-    parser.error("Model path must be specified either via --model-path argument or MODEL_PATH environment variable")
+    parser.error(
+        "Model path must be specified either via --model-path argument or MODEL_PATH environment variable"
+    )
 
-config = AutoConfig.from_pretrained(model_path)
+### If you want to dump RoPE activations, uncomment the following lines:
+### === START ROPE DEBUG ===
+# from utils.common import setup_rope_debug
+# setup_rope_debug("transformers.models.apertus.modeling_apertus")
+### == END ROPE DEBUG ===
+
+
+print("Loading model and tokenizer using AutoTokenizer:", model_path)
+tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+multimodal = False
+full_config = config
 
 print("Model type:       ", config.model_type)
+if "vocab_size" not in config and "text_config" in config:
+    config = config.text_config
+    multimodal = True
 print("Vocab size:       ", config.vocab_size)
 print("Hidden size:      ", config.hidden_size)
 print("Number of layers: ", config.num_hidden_layers)
 print("BOS token id:     ", config.bos_token_id)
 print("EOS token id:     ", config.eos_token_id)
 
-print("Loading model and tokenizer using AutoTokenizer:", model_path)
-tokenizer = AutoTokenizer.from_pretrained(model_path)
-config = AutoConfig.from_pretrained(model_path)
-
+unreleased_model_name = os.getenv("UNRELEASED_MODEL_NAME")
 if unreleased_model_name:
     model_name_lower = unreleased_model_name.lower()
-    unreleased_module_path = f"transformers.models.{model_name_lower}.modular_{model_name_lower}"
+    unreleased_module_path = (
+        f"transformers.models.{model_name_lower}.modular_{model_name_lower}"
+    )
     class_name = f"{unreleased_model_name}ForCausalLM"
     print(f"Importing unreleased model module: {unreleased_module_path}")
 
     try:
-        model_class = getattr(importlib.import_module(unreleased_module_path), class_name)
-        model = model_class.from_pretrained(model_path)  # Note: from_pretrained, not fromPretrained
+        model_class = getattr(
+            importlib.import_module(unreleased_module_path), class_name
+        )
+        model = model_class.from_pretrained(
+            model_path
+        )  # Note: from_pretrained, not fromPretrained
     except (ImportError, AttributeError) as e:
         print(f"Failed to import or load model: {e}")
         exit(1)
 else:
-    model = AutoModelForCausalLM.from_pretrained(model_path)
+    if multimodal:
+        model = AutoModelForImageTextToText.from_pretrained(
+            model_path, device_map="auto", offload_folder="offload", trust_remote_code=True, config=full_config
+        )
+    else:
+        model = AutoModelForCausalLM.from_pretrained(
+            model_path, device_map="auto", offload_folder="offload", trust_remote_code=True, config=config
+        )
+
+if args.verbose:
+    for name, module in model.named_modules():
+        if len(list(module.children())) == 0:  # only leaf modules
+            module.register_forward_hook(debug_hook(name))
 
 model_name = os.path.basename(model_path)
 # Printing the Model class to allow for easier debugging. This can be useful
@@ -54,19 +90,35 @@ model_name = os.path.basename(model_path)
 # of using AutoModelForCausalLM.
 print(f"Model class: {model.__class__.__name__}")
 
-prompt = "Hello, my name is"
-input_ids = tokenizer(prompt, return_tensors="pt").input_ids
+device = next(model.parameters()).device
+if args.prompt_file:
+    with open(args.prompt_file, encoding='utf-8') as f:
+        prompt = f.read()
+elif os.getenv("MODEL_TESTING_PROMPT"):
+    prompt = os.getenv("MODEL_TESTING_PROMPT")
+else:
+    prompt = "Hello, my name is"
+input_ids = tokenizer(prompt, return_tensors="pt").input_ids.to(device)
 
 print(f"Input tokens: {input_ids}")
 print(f"Input text: {repr(prompt)}")
 print(f"Tokenized: {tokenizer.convert_ids_to_tokens(input_ids[0])}")
 
+batch_size = 512
+
 with torch.no_grad():
-    outputs = model(input_ids)
-    logits = outputs.logits
+    past = None
+    outputs = None
+    for i in range(0, input_ids.size(1), batch_size):
+        print(f"Processing chunk with tokens {i} to {i + batch_size}")
+        chunk = input_ids[:, i:i + batch_size]
+        outputs = model(chunk.to(model.device), past_key_values=past, use_cache=True)
+        past = outputs.past_key_values
+
+    logits = outputs.logits # type: ignore
 
     # Extract logits for the last token (next token prediction)
-    last_logits = logits[0, -1, :].cpu().numpy()
+    last_logits = logits[0, -1, :].float().cpu().numpy()
 
     print(f"Logits shape: {logits.shape}")
     print(f"Last token logits shape: {last_logits.shape}")

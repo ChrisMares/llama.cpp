@@ -10,6 +10,13 @@ and in some cases perplexity checked of the quantized model. And finally the
 model/models need to the ggml-org on Hugging Face. This tool/example tries to
 help with this process.
 
+> 📝 **Note:** When adding a new model from an existing family, verify the
+> previous version passes logits verification first. Existing models can have
+> subtle numerical differences that don't affect generation quality but cause
+> logits mismatches. Identifying these upfront whether they exist in llama.cpp,
+> the conversion script, or in an upstream implementation, can save significant
+> debugging time.
+
 ### Overview
 The idea is that the makefile targets and scripts here can be used in the
 development/conversion process assisting with things like:
@@ -105,12 +112,12 @@ new model, the model can be converted to GGUF format using the following command
 ### Inspecting the converted model
 The converted model can be inspected using the following command:
 ```console
-(venv) $ make inspect-converted-model
+(venv) $ make causal-inspect-converted-model
 ```
 
 ### Running the converted model
 ```console
-(venv) $ make run-converted-model
+(venv) $ make causal-run-converted-model
 ```
 
 ### Model logits verfication
@@ -135,6 +142,18 @@ export QUANTIZED_MODEL=/path/to/quantized/model-Q8_0.gguf
 Then the quantized model can be run using the following command:
 ```console
 (venv) $ make causal-run-quantized-model
+```
+
+### Quantizing QAT (Quantization Aware Training) models
+When quantizing to `Q4_0`, the default data type for the token embedding weights
+will be `Q6_K`. For models that are going to be uploaded to ggml-org it is
+recommended to use `Q8_0` instead for the embeddings and output tensors.
+The reason is that although `Q6_K` is smaller in size, it requires more compute
+to unpack, which can hurt performance during output generation when the entire
+embedding matrix must be dequantized to compute vocabulary logits. `Q8_0`
+provides practically full quality with better computational efficiency.
+```console
+(venv) $ make causal-quantize-qat-Q4_0
 ```
 
 
@@ -177,6 +196,23 @@ This command will save two files to the `data` directory, one is a binary
 file containing logits which will be used for comparison with the converted
 model, and the other is a text file which allows for manual visual inspection.
 
+#### Using SentenceTransformer with numbered layers
+For models that have numbered SentenceTransformer layers (01_Pooling, 02_Dense,
+03_Dense, 04_Normalize), use the `-st` targets to apply all these layers:
+
+```console
+# Run original model with SentenceTransformer (applies all numbered layers)
+(venv) $ make embedding-run-original-model-st
+
+# Run converted model with pooling enabled
+(venv) $ make embedding-run-converted-model-st
+```
+
+This will use the SentenceTransformer library to load and run the model, which
+automatically applies all the numbered layers in the correct order. This is
+particularly useful when comparing with models that should include these
+additional transformation layers beyond just the base model output.
+
 ### Model conversion
 After updates have been made to [gguf-py](../../gguf-py) to add support for the
 new model the model can be converted to GGUF format using the following command:
@@ -195,6 +231,13 @@ was done manually in the previous steps) and compare the logits:
 ```console
 (venv) $ make embedding-verify-logits
 ```
+
+For models with SentenceTransformer layers, use the `-st` verification target:
+```console
+(venv) $ make embedding-verify-logits-st
+```
+This convenience target automatically runs both the original model with SentenceTransformer
+and the converted model with pooling enabled, then compares the results.
 
 ### llama-server verification
 To verify that the converted model works with llama-server, the following
@@ -236,6 +279,18 @@ export QUANTIZED_EMBEDDING_MODEL=/path/to/quantized/model-Q8_0.gguf
 Then the quantized model can be run using the following command:
 ```console
 (venv) $ make embedding-run-quantized-model
+```
+
+### Quantizing QAT (Quantization Aware Training) models
+When quantizing to `Q4_0`, the default data type for the token embedding weights
+will be `Q6_K`. For models that are going to be uploaded to ggml-org it is
+recommended to use `Q8_0` instead for the embeddings and output tensors.
+The reason is that although `Q6_K` is smaller in size, it requires more compute
+to unpack, which can hurt performance during output generation when the entire
+embedding matrix must be dequantized to compute vocabulary logits. `Q8_0`
+provides practically full quality with better computational efficiency.
+```console
+(venv) $ make embedding-quantize-qat-Q4_0
 ```
 
 ## Perplexity Evaluation
@@ -285,12 +340,20 @@ For the following targets a `HF_TOKEN` environment variable is required.
 This will create a new model repsository on Hugging Face with the specified
 model name.
 ```console
-(venv) $ make hf-create-model MODEL_NAME='TestModel' NAMESPACE="danbev"
+(venv) $ make hf-create-model MODEL_NAME='TestModel' NAMESPACE="danbev" ORIGINAL_BASE_MODEL="some-base-model"
 Repository ID:  danbev/TestModel-GGUF
 Repository created: https://huggingface.co/danbev/TestModel-GGUF
 ```
 Note that we append a `-GGUF` suffix to the model name to ensure a consistent
 naming convention for GGUF models.
+
+An embedding model can be created using the following command:
+```console
+(venv) $ make hf-create-model-embedding MODEL_NAME='TestEmbeddingModel' NAMESPACE="danbev" ORIGINAL_BASE_MODEL="some-base-model"
+```
+The only difference is that the model card for an embedding model will be different
+with regards to the llama-server command and also how to access/call the embedding
+endpoint.
 
 ### Upload a GGUF model to model repository
 The following target uploads a model to an existing Hugging Face model repository.

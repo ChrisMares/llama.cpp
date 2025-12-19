@@ -1,4 +1,5 @@
-# Validation functions
+MAKEFLAGS += --no-print-directory
+
 define validate_model_path
 	@if [ -z "$(MODEL_PATH)" ]; then \
 		echo "Error: MODEL_PATH must be provided either as:"; \
@@ -17,6 +18,13 @@ define validate_embedding_model_path
 	fi
 endef
 
+define quantize_model
+	@CONVERTED_MODEL="$(1)" QUANTIZED_TYPE="$(QUANTIZED_TYPE)" \
+	TOKEN_EMBD_TYPE="$(TOKEN_EMBD_TYPE)" OUTPUT_TYPE="$(OUTPUT_TYPE)" \
+	./scripts/utils/quantize.sh "$(1)" "$(QUANTIZED_TYPE)" "$(TOKEN_EMBD_TYPE)" "$(OUTPUT_TYPE)"
+	@echo "Export the quantized model path to $(2) variable in your environment"
+endef
+
 ###
 ### Casual Model targets/recipes
 ###
@@ -28,6 +36,20 @@ causal-convert-model:
 	@MODEL_NAME="$(MODEL_NAME)" OUTTYPE="$(OUTTYPE)" MODEL_PATH="$(MODEL_PATH)" \
 	METADATA_OVERRIDE="$(METADATA_OVERRIDE)" \
 	./scripts/causal/convert-model.sh
+
+causal-convert-mm-model-bf16: OUTTYPE=bf16
+causal-convert-mm-model-bf16: MM_OUTTYPE=f16
+causal-convert-mm-model-bf16: causal-convert-mm-model
+
+causal-convert-mm-model:
+	$(call validate_model_path,causal-convert-mm-model)
+	@MODEL_NAME="$(MODEL_NAME)" OUTTYPE="$(OUTTYPE)" MODEL_PATH="$(MODEL_PATH)" \
+	METADATA_OVERRIDE="$(METADATA_OVERRIDE)" \
+	./scripts/causal/convert-model.sh
+
+	@MODEL_NAME="$(MODEL_NAME)" OUTTYPE="$(MM_OUTTYPE)" MODEL_PATH="$(MODEL_PATH)" \
+	METADATA_OVERRIDE="$(METADATA_OVERRIDE)" \
+	./scripts/causal/convert-model.sh --mmproj
 
 causal-run-original-model:
 	$(call validate_model_path,causal-run-original-model)
@@ -41,7 +63,7 @@ causal-verify-logits: causal-run-original-model causal-run-converted-model
 	@MODEL_PATH="$(MODEL_PATH)" ./scripts/utils/check-nmse.py -m ${MODEL_PATH}
 
 causal-run-original-embeddings:
-	@./scripts/causal/run-casual-gen-embeddings-org.sh
+	@./scripts/causal/run-casual-gen-embeddings-org.py
 
 causal-run-converted-embeddings:
 	@./scripts/causal/run-converted-model-embeddings-logits.sh
@@ -67,9 +89,15 @@ causal-quantize-Q8_0: causal-quantize-model
 causal-quantize-Q4_0: QUANTIZED_TYPE = Q4_0
 causal-quantize-Q4_0: causal-quantize-model
 
+# For Quantization Aware Trained (QAT) models in Q4_0 we explicitly set the
+# token embedding and output types to Q8_0 instead of the default Q6_K.
+causal-quantize-qat-Q4_0: QUANTIZED_TYPE = Q4_0
+causal-quantize-qat-Q4_0: TOKEN_EMBD_TYPE = Q8_0
+causal-quantize-qat-Q4_0: OUTPUT_TYPE = Q8_0
+causal-quantize-qat-Q4_0: causal-quantize-model
+
 causal-quantize-model:
-	@CONVERTED_MODEL="$(CONVERTED_MODEL)" QUANTIZED_TYPE="$(QUANTIZED_TYPE)" ./scripts/utils/quantize.sh ${CONVERTED_MODEL} ${QUANTIZED_TYPE}
-	@echo "Export the quantized model path to QUANTIZED_MODEL variable in your environment"
+	$(call quantize_model,$(CONVERTED_MODEL),QUANTIZED_MODEL)
 
 causal-run-quantized-model:
 	@QUANTIZED_MODEL="$(QUANTIZED_MODEL)" ./scripts/causal/run-converted-model.sh ${QUANTIZED_MODEL}
@@ -88,15 +116,38 @@ embedding-convert-model:
 	METADATA_OVERRIDE="$(METADATA_OVERRIDE)" \
 	./scripts/embedding/convert-model.sh
 
+embedding-convert-model-st:
+	$(call validate_embedding_model_path,embedding-convert-model-st)
+	@MODEL_NAME="$(MODEL_NAME)" OUTTYPE="$(OUTTYPE)" MODEL_PATH="$(EMBEDDING_MODEL_PATH)" \
+	METADATA_OVERRIDE="$(METADATA_OVERRIDE)" \
+	./scripts/embedding/convert-model.sh -st
+
 embedding-run-original-model:
 	$(call validate_embedding_model_path,embedding-run-original-model)
-	@EMBEDDING_MODEL_PATH="$(EMBEDDING_MODEL_PATH)" ./scripts/embedding/run-original-model.py
+	@EMBEDDING_MODEL_PATH="$(EMBEDDING_MODEL_PATH)" \
+	USE_SENTENCE_TRANSFORMERS="$(USE_SENTENCE_TRANSFORMERS)" \
+	./scripts/embedding/run-original-model.py \
+	$(if $(PROMPTS_FILE),--prompts-file "$(PROMPTS_FILE)") \
+	$(if $(USE_SENTENCE_TRANSFORMERS),--use-sentence-transformers)
+
+embedding-run-original-model-st: USE_SENTENCE_TRANSFORMERS=1
+embedding-run-original-model-st: embedding-run-original-model
 
 embedding-run-converted-model:
-	@CONVERTED_EMBEDDING_MODEL="$(CONVERTED_EMBEDDING_MODEL)" ./scripts/embedding/run-converted-model.sh ${CONVERTED_EMBEDDING_MODEL}
+	@./scripts/embedding/run-converted-model.sh $(CONVERTED_EMBEDDING_MODEL) \
+	$(if $(PROMPTS_FILE),--prompts-file "$(PROMPTS_FILE)") \
+	$(if $(USE_POOLING),--pooling)
+
+embedding-run-converted-model-st: USE_POOLING=1
+embedding-run-converted-model-st: embedding-run-converted-model
 
 embedding-verify-logits: embedding-run-original-model embedding-run-converted-model
-	@./scripts/embedding/compare-embeddings-logits.sh
+	@./scripts/embedding/compare-embeddings-logits.sh \
+	$(if $(PROMPTS_FILE),--prompts-file "$(PROMPTS_FILE)")
+
+embedding-verify-logits-st: embedding-run-original-model-st embedding-run-converted-model-st
+	@./scripts/embedding/compare-embeddings-logits.sh \
+	$(if $(PROMPTS_FILE),--prompts-file "$(PROMPTS_FILE)")
 
 embedding-inspect-original-model:
 	$(call validate_embedding_model_path,embedding-inspect-original-model)
@@ -117,12 +168,19 @@ embedding-quantize-Q8_0: embedding-quantize-model
 embedding-quantize-Q4_0: QUANTIZED_TYPE = Q4_0
 embedding-quantize-Q4_0: embedding-quantize-model
 
+# For Quantization Aware Trained (QAT) models in Q4_0 we explicitly set the
+# token embedding and output types to Q8_0 instead of the default Q6_K.
+embedding-quantize-qat-Q4_0: QUANTIZED_TYPE = Q4_0
+embedding-quantize-qat-Q4_0: TOKEN_EMBD_TYPE = Q8_0
+embedding-quantize-qat-Q4_0: OUTPUT_TYPE = Q8_0
+embedding-quantize-qat-Q4_0: embedding-quantize-model
+
 embedding-quantize-model:
-	@./scripts/utils/quantize.sh ${CONVERTED_EMBEDDING_MODEL} ${QUANTIZED_TYPE}
-	@echo "Export the quantized model path to QUANTIZED_EMBEDDING_MODEL variable in your environment"
+	$(call quantize_model,$(CONVERTED_EMBEDDING_MODEL),QUANTIZED_EMBEDDING_MODEL)
 
 embedding-run-quantized-model:
-	@./scripts/embedding/run-converted-model.sh ${QUANTIZED_EMBEDDING_MODEL}
+	@./scripts/embedding/run-converted-model.sh $(QUANTIZED_EMBEDDING_MODEL) \
+	$(if $(PROMPTS_FILE),--prompts-file "$(PROMPTS_FILE)")
 
 ###
 ### Perplexity targets/recipes
@@ -143,6 +201,15 @@ perplexity-run:
 
 hf-create-model:
 	@./scripts/utils/hf-create-model.py -m "${MODEL_NAME}" -ns "${NAMESPACE}" -b "${ORIGINAL_BASE_MODEL}"
+
+hf-create-model-dry-run:
+	@./scripts/utils/hf-create-model.py -m "${MODEL_NAME}" -ns "${NAMESPACE}" -b "${ORIGINAL_BASE_MODEL}" -d
+
+hf-create-model-embedding:
+	@./scripts/utils/hf-create-model.py -m "${MODEL_NAME}" -ns "${NAMESPACE}" -b "${ORIGINAL_BASE_MODEL}" -e
+
+hf-create-model-embedding-dry-run:
+	@./scripts/utils/hf-create-model.py -m "${MODEL_NAME}" -ns "${NAMESPACE}" -b "${ORIGINAL_BASE_MODEL}" -e -d
 
 hf-create-model-private:
 	@./scripts/utils/hf-create-model.py -m "${MODEL_NAME}" -ns "${NAMESPACE}" -b "${ORIGINAL_BASE_MODEL}" -p
