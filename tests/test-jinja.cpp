@@ -435,6 +435,24 @@ static void test_expressions(testing & t) {
         "('c', 'b', 'a')"
     );
 
+    test_template(t, "string slice negative step",
+        "{{ 'abcdef'[::-2] }}",
+        json::object(),
+        "fdb"
+    );
+
+    test_template(t, "string slice negative start and step",
+        "{{ 'abcdef'[-1:1:-1] }}",
+        json::object(),
+        "fedc"
+    );
+
+    test_template(t, "string slice negative start, stop and step",
+        "{{ 'abcdef'[-1:-5:-1] }}",
+        json::object(),
+        "fedc"
+    );
+
     test_template(t, "arithmetic",
         "{{ (a + b) * c }}",
         {{"a", 2}, {"b", 3}, {"c", 4}},
@@ -445,6 +463,18 @@ static void test_expressions(testing & t) {
         "{{ 'hello' ~ ' ' ~ 'world' }}",
         json::object(),
         "hello world"
+    );
+
+    test_template(t, "string repetition",
+        "{{ 'ab' * 3 }}",
+        json::object(),
+        "ababab"
+    );
+
+    test_template(t, "reversed string repetition",
+        "{{ 3 * 'ab' }}",
+        json::object(),
+        "ababab"
     );
 
     test_template(t, "ternary",
@@ -571,8 +601,8 @@ static void test_filters(testing & t) {
         "hello jinja"
     );
 
-    test_template(t, "length list",
-        "{{ items|length }}",
+    test_template(t, "length (count alias) list",
+        "{{ items|count }}",
         {{"items", json::array({1, 2, 3})}},
         "3"
     );
@@ -681,8 +711,8 @@ static void test_filters(testing & t) {
         "fallback"
     );
 
-    test_template(t, "default with falsy value",
-        "{{ ''|default('fallback', true) }}",
+    test_template(t, "default (d alias) with falsy value",
+        "{{ ''|d('fallback', true) }}",
         json::object(),
         "fallback"
     );
@@ -691,6 +721,33 @@ static void test_filters(testing & t) {
         "{{ data|tojson(ensure_ascii=true) }}",
         {{"data", "\u2713"}},
         "\"\\u2713\""
+    );
+
+    test_template(t, "tojson ensure_ascii=true nested object",
+        "{{ data|tojson(ensure_ascii=true) }}",
+        {{"data", {
+            {"text", "\u2713"},
+            {"items", json::array({"é", {{"snowman", "☃"}}})}
+        }}},
+        "{\"text\": \"\\u2713\", \"items\": [\"\\u00e9\", {\"snowman\": \"\\u2603\"}]}"
+    );
+
+    test_template(t, "tojson ensure_ascii=true indent=2",
+        "{{ data|tojson(ensure_ascii=true, indent=2) }}",
+        {{"data", {
+            {"text", "\u2713"},
+            {"nested", {{"accent", "é"}}}
+        }}},
+        "{\n  \"text\": \"\\u2713\",\n  \"nested\": {\n    \"accent\": \"\\u00e9\"\n  }\n}"
+    );
+
+    test_template(t, "tojson ensure_ascii=true preserves existing escapes",
+        "{{ data|tojson(ensure_ascii=true) }}",
+        {{"data", {
+            {"emoji", "😀"},
+            {"line", "a\nb"}
+        }}},
+        "{\"emoji\": \"\\ud83d\\ude00\", \"line\": \"a\\nb\"}"
     );
 
     test_template(t, "tojson sort_keys=true",
@@ -769,6 +826,12 @@ static void test_filters(testing & t) {
         "{{ '  HELLO  '|trim|lower }}",
         json::object(),
         "hello"
+    );
+
+    test_template(t, "int filter on integer is identity",
+        "{{ value|int }}",
+        {{"value", 7}},
+        "7"
     );
 
     test_template(t, "none to string",
@@ -931,6 +994,32 @@ static void test_macros(testing & t) {
         "{% macro greet(first, last, greeting='Hello') %}{{ greeting }}, {{ first }} {{ last }}{% endmacro %}{{ greet(last='Smith', first='John') }},{{ greet(last='Doe', greeting='Hi', first='Jane') }}",
         json::object(),
         "Hello, John Smith,Hi, Jane Doe"
+    );
+
+    test_template(t, "macro with caller",
+        "\
+{%- macro nest_dict(o, i, ff='') %}\n\
+  {{- caller(ff) }}\n\
+  {%- for k, v in o|items %}\n\
+    {{- i + k + ': ' }}\n\
+    {%- if v is mapping %}\n\
+      {{- '{' }}\n\
+      {% call(f) nest_dict(v, i + '    ') %}\n\
+        {{- 'fail' if ff is undefined }}\n\
+      {%- endcall %}\n\
+      {{- i + '}' }}\n\
+    {% else %}\n\
+      {{- v|string }}\n\
+    {% endif %}\n\
+  {%- endfor %}\n\
+{%- endmacro %}\n\
+{%- call(f) nest_dict({'root1': 1, 'root2': {'nest1': 1, 'nest2': {'nest3': 2}}}, '    ', 'Dict') %}\n\
+  {{- 'fail' if ff is defined }}\n\
+  {{- f + ' {' }}\n\
+{% endcall %}\n\
+{{- '}' }}",
+        json::object(),
+        "Dict {\n    root1: 1\n    root2: {\n        nest1: 1\n        nest2: {\n            nest3: 2\n        }\n    }\n}"
     );
 }
 
@@ -1275,6 +1364,12 @@ static void test_string_methods(testing & t) {
         "hello jinja"
     );
 
+    test_template(t, "string.replace() empty",
+        "{{ s.replace('', '.') }}",
+        {{"s", "hello world"}},
+        ".h.e.l.l.o. .w.o.r.l.d."
+    );
+
     test_template(t, "string.replace() with count",
         "{{ s.replace('a', 'X', 2) }}",
         {{"s", "banana"}},
@@ -1487,6 +1582,36 @@ static void test_array_methods(testing & t) {
         "{{ arr|map('int')|sum }}",
         {{"arr", json::array({"1", "2", "3"})}},
         "6"
+    );
+
+    test_template(t, "array|min",
+        "{{ [tool_calls_count, tool_sep_count]|min }}",
+        {{"tool_calls_count", 2}, {"tool_sep_count", 1}},
+        "1"
+    );
+
+    test_template(t, "array|max",
+        "{{ [tool_calls_count, tool_sep_count]|max }}",
+        {{"tool_calls_count", 2}, {"tool_sep_count", 1}},
+        "2"
+    );
+
+    test_template(t, "array|min attribute",
+        "{{ items|min(attribute='x') }}",
+        {{"items", json::array({
+            json({{"x", 2}}),
+            json({{"x", 1}}),
+        })}},
+        "{'x': 1}"
+    );
+
+    test_template(t, "array|max attribute",
+        "{{ items|max(attribute='x') }}",
+        {{"items", json::array({
+            json({{"x", 2}}),
+            json({{"x", 1}}),
+        })}},
+        "{'x': 2}"
     );
 
     // not used by any chat templates
@@ -2457,5 +2582,13 @@ static void test_fuzzing(testing & t) {
 
             t.assert_true("builtin " + type_name + "." + fn_name + " #" + std::to_string(i), fuzz_test_template(tmpl, vars));
         }
+    });
+
+    t.test("tojson ensure_ascii=true with invalid utf-8", [&](testing & t) {
+        t.assert_true("invalid utf-8 does not crash",
+            fuzz_test_template(
+                "{{ data|tojson(ensure_ascii=true) }}",
+                {{"data", std::string("hello\xfe\xffworld")}}
+            ));
     });
 }
